@@ -1,11 +1,11 @@
-# Monitoring and logging of battery level for z-wave nodes
+# Domoticz Python plugin for Monitoring and logging of battery level for z-wave nodes
 #
 # Author: Logread
 #
 # Version: 0.1.0: First Beta release
 #
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.1.0" wikilink="http://www.domoticz.com/wiki/plugins/plugin.html" externallink="https://www.google.com/">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.1.0" wikilink="http://www.domoticz.com/wiki/plugins/plugin.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Address" label="Source Domoticz IP Address" width="200px" required="true" default="127.0.0.1"/>
         <param field="Port" label="Port" width="40px" required="true" default="8080"/>
@@ -52,7 +52,7 @@ class BasePlugin:
 
         # load custom battery images
         for key, value in icons.items():
-            if (key not in Images):
+            if key not in Images:
                 Domoticz.Image(value).Create()
                 Domoticz.Debug("Added icon: " + key + " from file " + value)
         Domoticz.Debug("Number of icons loaded = " + str(len(Images)))
@@ -225,7 +225,7 @@ def PollAndUpdate():
 
 def UpdateDevice(Unit, Percent):
     # Make sure that the Domoticz device still exists (they can be deleted) before updating it
-    if (Unit in Devices):
+    if Unit in Devices:
         levelBatt = int(Percent)
         if levelBatt >= 75:
             icon = "batterylevelfull"
