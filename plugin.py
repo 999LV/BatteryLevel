@@ -5,7 +5,7 @@
 # Version: 0.2.0: 2nd Beta release - made code more object oriented with cleaner scoping of variables
 #
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.1.0" wikilink="http://www.domoticz.com/wiki/plugins/plugin.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Address" label="Source Domoticz IP Address" width="200px" required="true" default="127.0.0.1"/>
         <param field="Port" label="Port" width="40px" required="true" default="8080"/>
@@ -37,11 +37,12 @@ class BasePlugin:
     def __init__(self):
         self.debug = False
         self.maxhartbeats = 59 * 6  # poll and update every 59 minutes, so that devices do not turn red in the GUI due to inactivity... this is a compromise setting
-        # self.maxhartbeats = 6 # for debug
-        self.lasthartbeat = 0
+        #self.maxhartbeats = 6 # for debug
+        self.lasthartbeat = -1
         self.hwidx = 0  # hardware idx of zwave controller
         self.zwNodes = {}  # list of all zwave nodes
         self.BatteryNodes = {}  # work dictionary for the plugin
+        self.APIRequest = ""
         return
 
     def onStart(self):
@@ -63,8 +64,12 @@ class BasePlugin:
         for image in Images:
             Domoticz.Debug("Icon " + str(Images[image].ID) + " " + Images[image].Name)
 
-        # perform initial poll and update
-        self.PollAndUpdate()
+        Domoticz.Transport("TCP/IP", Parameters["Address"], Parameters["Port"])
+        Domoticz.Protocol("HTTP")
+
+        # initiates initial Domoticz API request for a list of present Hardware
+        self.APIRequest = "/json.htm?type=hardware"
+        Domoticz.Connect()
 
     def onStop(self):
         Domoticz.Debug("onStop called")
@@ -72,10 +77,37 @@ class BasePlugin:
 
     def onConnect(self, Status, Description):
         Domoticz.Debug("onConnect called")
+        headers= {"Connection": "keep-alive", "Accept": "Content-Type: text/html; charset=UTF-8"}
+        data = ''
+        headers = {'Content-Type': 'text/xml; charset=utf-8',
+                   'Connection': 'close',
+                   'Accept': 'Content-Type: text/html; charset=UTF-8',
+                   'Host': Parameters["Address"] + ":" + Parameters["Port"],
+                   'User-Agent': 'Domoticz/1.0',
+                   'Content-Length': "%d" % (len(data))}
+        Domoticz.Send(data, 'GET', self.APIRequest, headers)
         return True
 
     def onMessage(self, Data, Status, Extra):
         Domoticz.Debug("onMessage called")
+        strData = Data.decode("utf-8", "ignore")
+        Domoticz.Debug("HTTP Status = " + str(Status))
+        if Status == 200:
+            Response = json.loads(strData)
+            Domoticz.Debug("Received Domoticz API response for " + Response["title"])
+            if Response["status"] == "OK" and "title" in Response:
+                if Response["title"] == "Hardware":
+                    self.getZWaveController(Response)
+                elif Response["title"] == "OpenZWaveNodes":
+                    self.getZWaveNodes(Response)
+                elif Response["title"] == "Devices":
+                    self.scanDevices(Response)
+                else:
+                    Domoticz.Error("Unknown Domoticz API response " + + Response["title"])
+            else:
+                Domoticz.Error("Domoticz API returned an error")
+        else:
+            Domoticz.Debug("Domoticz HTTP connection error")
 
     def onCommand(self, Unit, Command, Level, Hue):
         Domoticz.Debug("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
@@ -87,51 +119,29 @@ class BasePlugin:
         Domoticz.Debug("onDisconnect called")
 
     def onHeartbeat(self):
-        self.lasthartbeat += 1
-        if self.lasthartbeat >= self.maxhartbeats:
+        if self.lasthartbeat == -1 and self.hwidx > 0:  # This is our first heartbeat and we have a zwave controller... Obtain ZWave nodes
             self.lasthartbeat = 0
-            self.PollAndUpdate()
-            if self.debug:
-                Domoticz.Debug("onHeartbeat called")
+            self.APIRequest = "/json.htm?type=openzwavenodes&idx=" + str(self.hwidx)
+            Domoticz.Connect()
+        else:
+            self.lasthartbeat += 1
+            if self.lasthartbeat >= self.maxhartbeats:
+                self.lasthartbeat = 0
+            elif self.lasthartbeat == 1:
+                # self.PollAndUpdate()
+                self.APIRequest = "/json.htm?type=devices&filter=all&order=Name"
+                Domoticz.Connect()
+                if self.debug:
+                    Domoticz.Debug("Process loop called")
 
     # BatteryLevel specific methods
 
-    def dzAPICall(self, APIRequest):
-        """
-        Generic function to access the Domoticz API
-        :param APIRequest: a valid API request e.g. '/json.htm?type=hardware'
-        :return: the json object returned by the Domoticz API
-        """
-        url = "http://" + Parameters["Address"] + ":" + Parameters["Port"] + APIRequest
-        retobj = {}
-        try:
-            response = request.urlopen(url, None, 30)
-            if response.status == 200:
-                Domoticz.Debug("Domoticz API Call '" + url + "' success")
-                str_response = response.read().decode('utf-8')
-                retobj = json.loads(str_response)
-            else:
-                Domoticz.Error("Domoticz API Call '" + url + "' failed")
-                retobj["status"] = "Error"
-        except request.URLError:
-            Domoticz.Error("http call failed... Check network, IP, port or target system")
-            retobj["status"] = "Error"
-        return retobj
-
-    def getZWaveNodes(self):
-        """
-        Scans the target Domoticz system for a zwave controller (only the first one will be identified) and
-        scans all dependant zwave nodes to build a dictionnary of zwave nodes with key = node ID
-        :return: a dictionnary with all zwave nodes found. Also updates the self.hwidx variable with the hardware id of zwave controller found 
-        """
-        listZWNodes = {}
-        self.hwidx = 0
-        listHW = self.dzAPICall("/json.htm?type=hardware")
+    def getZWaveController(self, listHW):
         if listHW["status"] == "OK":
             Domoticz.Debug("Hardware scanned")
             for x in listHW["result"]:
                 if x["Type"] == 21:
-                    Domoticz.Debug("ZWave controller found: name = " + x["Name"] + ", idx=" + str(x["idx"]))
+                    Domoticz.Log("ZWave controller found: name = " + x["Name"] + ", idx=" + str(x["idx"]))
                     self.hwidx = int(x["idx"])
                     break
             if self.hwidx == 0:
@@ -139,18 +149,16 @@ class BasePlugin:
         else:
             Domoticz.Error("Hardware scan failed")
 
-        if self.hwidx > 0:
-            listNodes = self.dzAPICall("/json.htm?type=openzwavenodes&idx=" + str(self.hwidx))
-            if listNodes["status"] == "OK":
-                Domoticz.Debug("ZWave nodes scanned")
-                for x in listNodes["result"]:
-                    Domoticz.Debug("Zwave node found: " + str(x["NodeID"]) + " " + x["Name"])
-                    listZWNodes[str(x["NodeID"])] = x["Name"]
-            else:
-                Domoticz.Error("ZWave nodes scan failed")
-        return listZWNodes
+    def getZWaveNodes(self, listNodes):
+        if listNodes["status"] == "OK":
+            Domoticz.Debug("ZWave nodes scanned")
+            for x in listNodes["result"]:
+                Domoticz.Debug("Zwave node found: " + str(x["NodeID"]) + " " + x["Name"])
+                self.zwNodes[str(x["NodeID"])] = x["Name"]
+        else:
+            Domoticz.Error("ZWave nodes scan failed")
 
-    def scanDevices(self):
+    def scanDevices(self, listDevs):
         """
         scans all devices in the target Domoticz system and extracts all these that
         a) are battery operated and
@@ -159,7 +167,6 @@ class BasePlugin:
         :return: nothing 
         """
         self.BatteryNodes = {}
-        listDevs = self.dzAPICall("/json.htm?type=devices&filter=all&order=Name")
         if listDevs["status"] == "OK":
             Domoticz.Debug("Devices scanned")
             for device in listDevs["result"]:
@@ -171,26 +178,16 @@ class BasePlugin:
         else:
             Domoticz.Error("Devices scan failed")
 
-    def PollAndUpdate(self):
-        """
-        wrapper main function:
-        Scans the target Domoticz system for zwave nodes,
-        Polls devices for battery level and create/update plugin devices accordingly
-        :return: nothing
-        """
-        self.zwNodes = self.getZWaveNodes()
-        if len(self.zwNodes) > 0:
-            self.scanDevices()
-            for node in self.BatteryNodes:
-                unit = int(node)
-                Domoticz.Debug(
-                    "Battery Node " + node + " " + self.BatteryNodes[node].name + " " +
-                    str(self.BatteryNodes[node].level))
-                # if device does not yet exist, then create it
-                if not (unit in Devices):
-                    Domoticz.Device(Name=self.BatteryNodes[node].name, Unit=unit, TypeName="Custom",
-                                    Options={"Custom": "1;%"}).Create()
-                self.UpdateDevice(unit, str(self.BatteryNodes[node].level))
+        for node in self.BatteryNodes:
+            unit = int(node)
+            Domoticz.Debug(
+                "Battery Node " + node + " " + self.BatteryNodes[node].name + " " +
+                str(self.BatteryNodes[node].level))
+            # if device does not yet exist, then create it
+            if not (unit in Devices):
+                Domoticz.Device(Name=self.BatteryNodes[node].name, Unit=unit, TypeName="Custom",
+                                Options={"Custom": "1;%"}).Create()
+            self.UpdateDevice(unit, str(self.BatteryNodes[node].level))
 
     def UpdateDevice(self, Unit, Percent):
         # Make sure that the Domoticz device still exists (they can be deleted) before updating it
