@@ -3,6 +3,7 @@
 # Author: Logread
 #
 # Version: 0.2.0: 2nd Beta release - made code more object oriented with cleaner scoping of variables
+# Version: 0.3.0: 3rd Beta release - refactor of code to use asyncronous callbacks for http calls
 #
 """
 <plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
@@ -20,7 +21,6 @@
 """
 import Domoticz
 import json
-import urllib.request as request
 
 icons = {"batterylevelfull": "batterylevelfull icons.zip",
          "batterylevelok": "batterylevelok icons.zip",
@@ -36,7 +36,7 @@ class BasePlugin:
 
     def __init__(self):
         self.debug = False
-        self.maxhartbeats = 59 * 6  # poll and update every 59 minutes, so that devices do not turn red in the GUI due to inactivity... this is a compromise setting
+        self.maxhartbeats = 59 * 6  # poll and update every 59 minutes, so that devices do not turn red in the GUI due to inactivity...
         #self.maxhartbeats = 6 # for debug
         self.lasthartbeat = -1
         self.hwidx = 0  # hardware idx of zwave controller
