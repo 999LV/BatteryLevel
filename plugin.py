@@ -77,7 +77,6 @@ class BasePlugin:
 
     def onConnect(self, Status, Description):
         Domoticz.Debug("onConnect called")
-        headers= {"Connection": "keep-alive", "Accept": "Content-Type: text/html; charset=UTF-8"}
         data = ''
         headers = {'Content-Type': 'text/xml; charset=utf-8',
                    'Connection': 'close',
@@ -128,7 +127,6 @@ class BasePlugin:
             if self.lasthartbeat >= self.maxhartbeats:
                 self.lasthartbeat = 0
             elif self.lasthartbeat == 1:
-                # self.PollAndUpdate()
                 self.APIRequest = "/json.htm?type=devices&filter=all&order=Name"
                 Domoticz.Connect()
                 if self.debug:
@@ -163,7 +161,8 @@ class BasePlugin:
         scans all devices in the target Domoticz system and extracts all these that
         a) are battery operated and
         b) belong to the zwave controller
-        updates the self.BatteryNodes dictionnary accordingly
+        c) updates the self.BatteryNodes dictionnary accordingly
+        d) updates the Domoticz devices
         :return: nothing 
         """
         self.BatteryNodes = {}
