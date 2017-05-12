@@ -4,9 +4,10 @@
 #
 # Version: 0.2.0: 2nd Beta release - made code more object oriented with cleaner scoping of variables
 # Version: 0.3.0: 3rd Beta release - refactor of code to use asyncronous callbacks for http calls
+# Version: 0.3.1: 4th Beta release - skip zwave devices with "non standard" ID attribution (thanks @bdormael)
 #
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Address" label="Source Domoticz IP Address" width="200px" required="true" default="127.0.0.1"/>
         <param field="Port" label="Port" width="40px" required="true" default="8080"/>
@@ -171,9 +172,13 @@ class BasePlugin:
             for device in listDevs["result"]:
                 if device["BatteryLevel"] < 255 and device["HardwareID"] == self.hwidx:
                     nodeID = int(device["ID"][:-2], 16)  # calculate the zwave node id that the domoticz device belongs to
+                    s_nodeID = str(nodeID)
                     Domoticz.Debug("Battery device found: name = " + device["Name"] + ", idx=" + str(device["idx"]) +
-                                   ", Battery=" + str(device["BatteryLevel"]) + ", Zwave Node = " + str(nodeID))
-                    self.BatteryNodes[str(nodeID)] = c_node(self.zwNodes[str(nodeID)], device["BatteryLevel"])
+                                   ", Battery=" + str(device["BatteryLevel"]) + ", Zwave Node = " + s_nodeID)
+                    if s_nodeID in self.zwNodes:
+                        self.BatteryNodes[str(nodeID)] = c_node(self.zwNodes[s_nodeID], device["BatteryLevel"])
+                    else:
+                        Domoticz.Debug("Skipped processing of device idx = " + str(device["idx"]) + " due to invalid node = " + s_nodeID)
         else:
             Domoticz.Error("Devices scan failed")
 
@@ -200,7 +205,10 @@ class BasePlugin:
                 icon = "batterylevelow"
             else:
                 icon = "batterylevelempty"
-            Devices[Unit].Update(nValue=0, sValue=Percent, Image=Images[icon].ID)
+            try:
+                Devices[Unit].Update(nValue=0, sValue=Percent, Image=Images[icon].ID)
+            except:
+                Domoticz.Error("Failed to update device unit " + str(Unit))
         return
 
 
