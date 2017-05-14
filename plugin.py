@@ -2,12 +2,13 @@
 #
 # Author: Logread
 #
-# Version: 0.2.0: 2nd Beta release - made code more object oriented with cleaner scoping of variables
-# Version: 0.3.0: 3rd Beta release - refactor of code to use asyncronous callbacks for http calls
-# Version: 0.3.1: 4th Beta release - skip zwave devices with "non standard" ID attribution (thanks @bdormael)
+# Version: 0.2.0: made code more object oriented with cleaner scoping of variables
+# Version: 0.3.0: refactor of code to use asyncronous callbacks for http calls
+# Version: 0.3.1: skip zwave devices with "non standard" ID attribution (thanks @bdormael)
+# Version: 0.3.2: rewrote the hashing of device ID into zwave node id in line with /hardware/ZWaveBase.cpp
 #
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.2" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Address" label="Source Domoticz IP Address" width="200px" required="true" default="127.0.0.1"/>
         <param field="Port" label="Port" width="40px" required="true" default="8080"/>
@@ -171,7 +172,14 @@ class BasePlugin:
             Domoticz.Debug("Devices scanned")
             for device in listDevs["result"]:
                 if device["BatteryLevel"] < 255 and device["HardwareID"] == self.hwidx:
-                    nodeID = int(device["ID"][:-2], 16)  # calculate the zwave node id that the domoticz device belongs to
+                    FullID = int(device["ID"], 16)
+                    #ID1 = (FullID & 0xFF000000) >> 24
+                    ID2 = (FullID & 0x00FF0000) >> 16
+                    ID3 = (FullID & 0x0000FF00) >> 8
+                    #ID4 = (FullID & 0x000000FF)
+                    nodeID = (ID2 << 8) | ID3
+                    if nodeID == 0:
+                        nodeID = FullID
                     s_nodeID = str(nodeID)
                     Domoticz.Debug("Battery device found: name = " + device["Name"] + ", idx=" + str(device["idx"]) +
                                    ", Battery=" + str(device["BatteryLevel"]) + ", Zwave Node = " + s_nodeID)
