@@ -1,17 +1,21 @@
-# Domoticz Python plugin for Monitoring and logging of battery level for z-wave nodes
-#
-# Author: Logread
-#
-# Version: 0.2.0: made code more object oriented with cleaner scoping of variables
-# Version: 0.3.0: refactor of code to use asyncronous callbacks for http calls
-# Version: 0.3.1: skip zwave devices with "non standard" ID attribution (thanks @bdormael)
-# Version: 0.3.2: rewrote the hashing of device ID into zwave node id in line with /hardware/ZWaveBase.cpp
+"""
+Domoticz Python plugin for Monitoring and logging of battery level for z-wave nodes
+
+Author: Logread
+
+Versions:
+    0.2.0: made code more object oriented with cleaner scoping of variables
+    0.3.0: refactor of code to use asyncronous callbacks for http calls
+    0.3.1: skip zwave devices with "non standard" ID attribution (thanks @bdormael)
+    0.3.2: rewrote the hashing of device ID into zwave node id in line with /hardware/ZWaveBase.cpp
+    0.4.0: Major change: Use openzwave as data source instead of the Domoticz API... 
+        simpler, faster and possibly more "real-time" information
 #
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.3.2" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+"""
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
-        <param field="Address" label="Source Domoticz IP Address" width="200px" required="true" default="127.0.0.1"/>
-        <param field="Port" label="Port" width="40px" required="true" default="8080"/>
+        <param field="Mode1" label="Polling interval (minutes, 30 mini)" width="40px" required="true" default="60"/>
         <param field="Mode6" label="Debug" width="75px">
             <options>
                 <option label="True" value="Debug"/>
@@ -22,15 +26,20 @@
 </plugin>
 """
 import Domoticz
-import json
+import xml.etree.ElementTree as xml
+import os
+import glob
+from datetime import datetime
+from datetime import timedelta
 
 icons = {"batterylevelfull": "batterylevelfull icons.zip",
          "batterylevelok": "batterylevelok icons.zip",
          "batterylevellow": "batterylevellow icons.zip",
          "batterylevelempty": "batterylevelempty icons.zip"}
 
-class c_node:
-    def __init__(self, name, level):
+class zwnode:
+    def __init__(self, nodeid, name, level):
+        self.nodeid = nodeid
         self.name = name
         self.level = level
 
@@ -38,13 +47,11 @@ class BasePlugin:
 
     def __init__(self):
         self.debug = False
-        self.maxhartbeats = 59 * 6  # poll and update every 59 minutes, so that devices do not turn red in the GUI due to inactivity...
-        #self.maxhartbeats = 6 # for debug
-        self.lasthartbeat = -1
-        self.hwidx = 0  # hardware idx of zwave controller
-        self.zwNodes = {}  # list of all zwave nodes
-        self.BatteryNodes = {}  # work dictionary for the plugin
-        self.APIRequest = ""
+        self.BatteryNodes = []  # work list that contains 'zwnode' objects
+        self.nextupdate = datetime.now()
+        self.pollinterval = 60  # default polling interval in minutes
+        self.zwaveinfofilepath = ""
+        self.error = False
         return
 
     def onStart(self):
@@ -66,12 +73,34 @@ class BasePlugin:
         for image in Images:
             Domoticz.Debug("Icon " + str(Images[image].ID) + " " + Images[image].Name)
 
-        Domoticz.Transport("TCP/IP", Parameters["Address"], Parameters["Port"])
-        Domoticz.Protocol("HTTP")
+        # check polling interval parameter
+        try:
+            temp = int(Parameters["Mode1"])
+        except:
+            Domoticz.Error("Invalid polling interval parameter")
+        else:
+            if temp < 30:
+                temp = 30  # minimum polling interval
+                Domoticz.Error("Specified polling interval too short: changed to 30 minutes")
+            elif temp > 1440:
+                temp = 1440  # maximum polling interval is 1 day
+                Domoticz.Error("Specified polling interval too long: changed to 1440 minutes (24 hours)")
+            self.pollinterval = temp
+        Domoticz.Log("Using polling interval of {} minutes".format(str(self.pollinterval)))
 
-        # initiates initial Domoticz API request for a list of present Hardware
-        self.APIRequest = "/json.htm?type=hardware"
-        Domoticz.Connect()
+        # find zwave controller(s)... only one active allowed !
+        self.error = True
+        controllers = glob.glob("./Config/zwcfg_0x????????.xml")
+        for controller in controllers:
+            lastmod = datetime.fromtimestamp(os.stat(controller).st_mtime)
+            if lastmod < datetime.now() - timedelta(hours=2):
+                Domoticz.Error("Ignoring controller {} since presumed dead (not updated for more than 2 hours)".format(controller))
+            else:
+                self.zwaveinfofilepath = controller
+                self.error = False
+                break
+        if self.error:
+            Domoticz.Error("Enable to find a zwave controller configuration file !")
 
     def onStop(self):
         Domoticz.Debug("onStop called")
@@ -79,36 +108,10 @@ class BasePlugin:
 
     def onConnect(self, Status, Description):
         Domoticz.Debug("onConnect called")
-        data = ''
-        headers = {'Content-Type': 'text/xml; charset=utf-8',
-                   'Connection': 'close',
-                   'Accept': 'Content-Type: text/html; charset=UTF-8',
-                   'Host': Parameters["Address"] + ":" + Parameters["Port"],
-                   'User-Agent': 'Domoticz/1.0',
-                   'Content-Length': "%d" % (len(data))}
-        Domoticz.Send(data, 'GET', self.APIRequest, headers)
         return True
 
     def onMessage(self, Data, Status, Extra):
-        Domoticz.Debug("onMessage called")
-        strData = Data.decode("utf-8", "ignore")
-        Domoticz.Debug("HTTP Status = " + str(Status))
-        if Status == 200:
-            Response = json.loads(strData)
-            Domoticz.Debug("Received Domoticz API response for " + Response["title"])
-            if Response["status"] == "OK" and "title" in Response:
-                if Response["title"] == "Hardware":
-                    self.getZWaveController(Response)
-                elif Response["title"] == "OpenZWaveNodes":
-                    self.getZWaveNodes(Response)
-                elif Response["title"] == "Devices":
-                    self.scanDevices(Response)
-                else:
-                    Domoticz.Error("Unknown Domoticz API response " + + Response["title"])
-            else:
-                Domoticz.Error("Domoticz API returned an error")
-        else:
-            Domoticz.Debug("Domoticz HTTP connection error")
+        return
 
     def onCommand(self, Unit, Command, Level, Hue):
         Domoticz.Debug("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
@@ -120,86 +123,39 @@ class BasePlugin:
         Domoticz.Debug("onDisconnect called")
 
     def onHeartbeat(self):
-        if self.lasthartbeat == -1 and self.hwidx > 0:  # This is our first heartbeat and we have a zwave controller... Obtain ZWave nodes
-            self.lasthartbeat = 0
-            self.APIRequest = "/json.htm?type=openzwavenodes&idx=" + str(self.hwidx)
-            Domoticz.Connect()
-        else:
-            self.lasthartbeat += 1
-            if self.lasthartbeat >= self.maxhartbeats:
-                self.lasthartbeat = 0
-            elif self.lasthartbeat == 1:
-                self.APIRequest = "/json.htm?type=devices&filter=all&order=Name"
-                Domoticz.Connect()
-                if self.debug:
-                    Domoticz.Debug("Process loop called")
+        now = datetime.now()
+        if now >= self.nextupdate:
+            self.nextupdate = now + timedelta(minutes=self.pollinterval)
+            self.pollnodes()
 
     # BatteryLevel specific methods
 
-    def getZWaveController(self, listHW):
-        if listHW["status"] == "OK":
-            Domoticz.Debug("Hardware scanned")
-            for x in listHW["result"]:
-                if x["Type"] == 21:
-                    Domoticz.Log("ZWave controller found: name = " + x["Name"] + ", idx=" + str(x["idx"]))
-                    self.hwidx = int(x["idx"])
-                    break
-            if self.hwidx == 0:
-                Domoticz.Error("No ZWave controller found")
-        else:
-            Domoticz.Error("Hardware scan failed")
-
-    def getZWaveNodes(self, listNodes):
-        if listNodes["status"] == "OK":
-            Domoticz.Debug("ZWave nodes scanned")
-            for x in listNodes["result"]:
-                Domoticz.Debug("Zwave node found: " + str(x["NodeID"]) + " " + x["Name"])
-                self.zwNodes[str(x["NodeID"])] = x["Name"]
-        else:
-            Domoticz.Error("ZWave nodes scan failed")
-
-    def scanDevices(self, listDevs):
-        """
-        scans all devices in the target Domoticz system and extracts all these that
-        a) are battery operated and
-        b) belong to the zwave controller
-        c) updates the self.BatteryNodes dictionnary accordingly
-        d) updates the Domoticz devices
-        :return: nothing 
-        """
-        self.BatteryNodes = {}
-        if listDevs["status"] == "OK":
-            Domoticz.Debug("Devices scanned")
-            for device in listDevs["result"]:
-                if device["BatteryLevel"] < 255 and device["HardwareID"] == self.hwidx:
-                    FullID = int(device["ID"], 16)
-                    #ID1 = (FullID & 0xFF000000) >> 24
-                    ID2 = (FullID & 0x00FF0000) >> 16
-                    ID3 = (FullID & 0x0000FF00) >> 8
-                    #ID4 = (FullID & 0x000000FF)
-                    nodeID = (ID2 << 8) | ID3
-                    if nodeID == 0:
-                        nodeID = FullID
-                    s_nodeID = str(nodeID)
-                    Domoticz.Debug("Battery device found: name = " + device["Name"] + ", idx=" + str(device["idx"]) +
-                                   ", Battery=" + str(device["BatteryLevel"]) + ", Zwave Node = " + s_nodeID)
-                    if s_nodeID in self.zwNodes:
-                        self.BatteryNodes[str(nodeID)] = c_node(self.zwNodes[s_nodeID], device["BatteryLevel"])
-                    else:
-                        Domoticz.Debug("Skipped processing of device idx = " + str(device["idx"]) + " due to invalid node = " + s_nodeID)
-        else:
-            Domoticz.Error("Devices scan failed")
+    def pollnodes(self):
+        # poll the openzwave file
+        if not self.error:
+            try:
+                zwavexml = xml.parse(self.zwaveinfofilepath)
+                zwave = zwavexml.getroot()
+            except:
+                error = True
+                Domoticz.Error("Error reading openzwave file {}".format(self.zwaveinfofilepath))
+            else:
+                for node in zwave:
+                    for commandclass in node[1]:  # node[1] is the list of CommandClasses
+                        if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
+                            self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
+                                                            int(commandclass[1].attrib["value"])))
+                            break
+        if self.error:
+            self.BatteryNodes = []
 
         for node in self.BatteryNodes:
-            unit = int(node)
-            Domoticz.Debug(
-                "Battery Node " + node + " " + self.BatteryNodes[node].name + " " +
-                str(self.BatteryNodes[node].level))
+            Domoticz.Debug("Node {} {} has battery level of {}%".format(node.nodeid, node.name, node.level))
             # if device does not yet exist, then create it
-            if not (unit in Devices):
-                Domoticz.Device(Name=self.BatteryNodes[node].name, Unit=unit, TypeName="Custom",
+            if not (node.nodeid in Devices):
+                Domoticz.Device(Name=node.name, Unit=node.nodeid, TypeName="Custom",
                                 Options={"Custom": "1;%"}).Create()
-            self.UpdateDevice(unit, str(self.BatteryNodes[node].level))
+            self.UpdateDevice(node.nodeid, str(node.level))
 
     def UpdateDevice(self, Unit, Percent):
         # Make sure that the Domoticz device still exists (they can be deleted) before updating it
@@ -218,7 +174,6 @@ class BasePlugin:
             except:
                 Domoticz.Error("Failed to update device unit " + str(Unit))
         return
-
 
 global _plugin
 _plugin = BasePlugin()
