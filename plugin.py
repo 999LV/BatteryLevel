@@ -12,7 +12,7 @@ Versions:
             simpler, faster and possibly more "real-time" information
     0.4.1: Code made compliant with Python plugin framework breaking changes
             https://www.domoticz.com/forum/viewtopic.php?f=65&t=17554
-#
+    0.4.2: Code cleanup
 """
 """
 <plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
@@ -108,22 +108,6 @@ class BasePlugin:
         Domoticz.Debug("onStop called")
         Domoticz.Debugging(0)
 
-#    def onConnect(self, Status, Description):
-#        Domoticz.Debug("onConnect called")
-#        return True
-
-#    def onMessage(self, Data, Status, Extra):
-#        return
-
-    def onCommand(self, Unit, Command, Level, Hue):
-        Domoticz.Debug("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
-
-    def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-        Domoticz.Debug("Notification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
-
-#    def onDisconnect(self):
-#        Domoticz.Debug("onDisconnect called")
-
     def onHeartbeat(self):
         now = datetime.now()
         if now >= self.nextupdate:
@@ -187,26 +171,6 @@ def onStart():
 def onStop():
     global _plugin
     _plugin.onStop()
-
-#def onConnect(Status, Description):
-#    global _plugin
-#    _plugin.onConnect(Status, Description)
-
-#def onMessage(Data, Status, Extra):
-#    global _plugin
-#    _plugin.onMessage(Data, Status, Extra)
-
-def onCommand(Unit, Command, Level, Hue):
-    global _plugin
-    _plugin.onCommand(Unit, Command, Level, Hue)
-
-def onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    global _plugin
-    _plugin.onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile)
-
-#def onDisconnect():
-#    global _plugin
-#    _plugin.onDisconnect()
 
 def onHeartbeat():
     global _plugin
