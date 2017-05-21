@@ -9,7 +9,9 @@ Versions:
     0.3.1: skip zwave devices with "non standard" ID attribution (thanks @bdormael)
     0.3.2: rewrote the hashing of device ID into zwave node id in line with /hardware/ZWaveBase.cpp
     0.4.0: Major change: Use openzwave as data source instead of the Domoticz API... 
-        simpler, faster and possibly more "real-time" information
+            simpler, faster and possibly more "real-time" information
+    0.4.1: Code made compliant with Python plugin framework breaking changes
+            https://www.domoticz.com/forum/viewtopic.php?f=65&t=17554
 #
 """
 """
@@ -106,12 +108,12 @@ class BasePlugin:
         Domoticz.Debug("onStop called")
         Domoticz.Debugging(0)
 
-    def onConnect(self, Status, Description):
-        Domoticz.Debug("onConnect called")
-        return True
+#    def onConnect(self, Status, Description):
+#        Domoticz.Debug("onConnect called")
+#        return True
 
-    def onMessage(self, Data, Status, Extra):
-        return
+#    def onMessage(self, Data, Status, Extra):
+#        return
 
     def onCommand(self, Unit, Command, Level, Hue):
         Domoticz.Debug("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
@@ -119,8 +121,8 @@ class BasePlugin:
     def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
         Domoticz.Debug("Notification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
 
-    def onDisconnect(self):
-        Domoticz.Debug("onDisconnect called")
+#    def onDisconnect(self):
+#        Domoticz.Debug("onDisconnect called")
 
     def onHeartbeat(self):
         now = datetime.now()
@@ -186,13 +188,13 @@ def onStop():
     global _plugin
     _plugin.onStop()
 
-def onConnect(Status, Description):
-    global _plugin
-    _plugin.onConnect(Status, Description)
+#def onConnect(Status, Description):
+#    global _plugin
+#    _plugin.onConnect(Status, Description)
 
-def onMessage(Data, Status, Extra):
-    global _plugin
-    _plugin.onMessage(Data, Status, Extra)
+#def onMessage(Data, Status, Extra):
+#    global _plugin
+#    _plugin.onMessage(Data, Status, Extra)
 
 def onCommand(Unit, Command, Level, Hue):
     global _plugin
@@ -202,9 +204,9 @@ def onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile):
     global _plugin
     _plugin.onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile)
 
-def onDisconnect():
-    global _plugin
-    _plugin.onDisconnect()
+#def onDisconnect():
+#    global _plugin
+#    _plugin.onDisconnect()
 
 def onHeartbeat():
     global _plugin
