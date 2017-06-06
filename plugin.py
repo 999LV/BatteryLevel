@@ -13,9 +13,10 @@ Versions:
     0.4.1: Code made compliant with Python plugin framework breaking changes
             https://www.domoticz.com/forum/viewtopic.php?f=65&t=17554
     0.4.2: Code cleanup
+    0.4.3: Added support for Synology Jadahl install (different location of zwave config file)
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.3" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Mode1" label="Polling interval (minutes, 30 mini)" width="40px" required="true" default="60"/>
         <param field="Mode6" label="Debug" width="75px">
@@ -93,6 +94,9 @@ class BasePlugin:
         # find zwave controller(s)... only one active allowed !
         self.error = True
         controllers = glob.glob("./Config/zwcfg_0x????????.xml")
+        if not controllers:
+            # test if we are running on a synology (different file locations)
+            controllers = glob.glob("/volume1/@appstore/domoticz/var/zwcfg_0x????????.xml")
         for controller in controllers:
             lastmod = datetime.fromtimestamp(os.stat(controller).st_mtime)
             if lastmod < datetime.now() - timedelta(hours=2):
@@ -123,7 +127,7 @@ class BasePlugin:
                 zwavexml = xml.parse(self.zwaveinfofilepath)
                 zwave = zwavexml.getroot()
             except:
-                error = True
+                self.error = True
                 Domoticz.Error("Error reading openzwave file {}".format(self.zwaveinfofilepath))
             else:
                 for node in zwave:
