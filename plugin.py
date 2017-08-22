@@ -14,9 +14,10 @@ Versions:
             https://www.domoticz.com/forum/viewtopic.php?f=65&t=17554
     0.4.2: Code cleanup
     0.4.3: Added support for Synology Jadahl install (different location of zwave config file)
+    0.4.4: Fixed typo in battery level low icon callup, causing device update errors for that level
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.3" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.4" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Mode1" label="Polling interval (minutes, 30 mini)" width="40px" required="true" default="60"/>
         <param field="Mode6" label="Debug" width="75px">
@@ -156,7 +157,7 @@ class BasePlugin:
             elif levelBatt >= 50:
                 icon = "batterylevelok"
             elif levelBatt >= 25:
-                icon = "batterylevelow"
+                icon = "batterylevellow"
             else:
                 icon = "batterylevelempty"
             try:
