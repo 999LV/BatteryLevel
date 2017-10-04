@@ -15,9 +15,10 @@ Versions:
     0.4.2: Code cleanup
     0.4.3: Added support for Synology Jadahl install (different location of zwave config file)
     0.4.4: Fixed typo in battery level low icon callup, causing device update errors for that level
+    0.4.5: Fixed bug in the polling of zwave nodes (thanks to domoticz forum user @PBdA !)
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.4" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.5" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Mode1" label="Polling interval (minutes, 30 mini)" width="40px" required="true" default="60"/>
         <param field="Mode6" label="Debug" width="75px">
@@ -122,6 +123,7 @@ class BasePlugin:
     # BatteryLevel specific methods
 
     def pollnodes(self):
+        self.BatteryNodes = []
         # poll the openzwave file
         if not self.error:
             try:
@@ -137,8 +139,6 @@ class BasePlugin:
                             self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
                                                             int(commandclass[1].attrib["value"])))
                             break
-        if self.error:
-            self.BatteryNodes = []
 
         for node in self.BatteryNodes:
             Domoticz.Debug("Node {} {} has battery level of {}%".format(node.nodeid, node.name, node.level))
