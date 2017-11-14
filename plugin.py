@@ -16,6 +16,7 @@ Versions:
     0.4.3: Added support for Synology Jadahl install (different location of zwave config file)
     0.4.4: Fixed typo in battery level low icon callup, causing device update errors for that level
     0.4.5: Fixed bug in the polling of zwave nodes (thanks to domoticz forum user @PBdA !)
+    0.4.6: Fixed issue when on system reboot the zwave conf file is empty as openzwave rebuilts it
 """
 """
 <plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.5" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
@@ -130,7 +131,6 @@ class BasePlugin:
                 zwavexml = xml.parse(self.zwaveinfofilepath)
                 zwave = zwavexml.getroot()
             except:
-                self.error = True
                 Domoticz.Error("Error reading openzwave file {}".format(self.zwaveinfofilepath))
             else:
                 for node in zwave:
