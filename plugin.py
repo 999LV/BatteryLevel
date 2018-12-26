@@ -17,14 +17,18 @@ Versions:
     0.4.4: Fixed typo in battery level low icon callup, causing device update errors for that level
     0.4.5: Fixed bug in the polling of zwave nodes (thanks to domoticz forum user @PBdA !)
     0.4.6: Fixed issue when on system reboot the zwave conf file is empty as openzwave rebuilts it
+    0.4.7: Added battery levels as parameters (jrcasal)
 """
 """
 <plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.5" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
-        <param field="Mode1" label="Polling interval (minutes, 30 mini)" width="40px" required="true" default="60"/>
+        <param field="Mode1" label="Polling interval (minutes, between 30 and 1440 min)" width="40px" required="true" default="60"/>
+        <param field="Mode2" label="Battery Level is Full (percent, between 75 and 99)"  width="40px" required="true" default="75" />
+        <param field="Mode3" label="Battery Level is OK (percent, between 40 and 75)"    width="40px" required="true" default="50" />
+        <param field="Mode4" label="Battery Level is empty (percent, between 10 and 25)" width="40px" required="true" default="25" />
         <param field="Mode6" label="Debug" width="75px">
             <options>
-                <option label="True" value="Debug"/>
+                <option label="True"  value="Debug"/>
                 <option label="False" value="Normal"  default="true" />
             </options>
         </param>
@@ -56,6 +60,9 @@ class BasePlugin:
         self.BatteryNodes = []  # work list that contains 'zwnode' objects
         self.nextupdate = datetime.now()
         self.pollinterval = 60  # default polling interval in minutes
+		self.batterylevelfull = 75 # Default values for Battery Levels
+		self.batterylevelok   = 50
+		self.batterylevellow  = 25
         self.zwaveinfofilepath = ""
         self.error = False
         return
@@ -69,7 +76,53 @@ class BasePlugin:
             DumpConfigToLog()
         else:
             Domoticz.Debugging(0)
-
+            
+        # Load custlom battery levels
+        # Battery  Full
+        try:
+            temp = int(Parameters["Mode2"])
+        except:
+            Domoticz.Error("Invalid Battery Full parameter")
+        else:
+            if temp < 75:
+                temp = 75
+                Domoticz.Error("Specified Battery Full value too low: changed to 75%")
+            elif temp > 99:
+                temp = 99
+                Domoticz.Error("Specified Battery Full value too high: changed to 99%")
+            self.batterylevelfull = temp
+        Domoticz.Log("Setting battery level to full if greater or equal than {} percent".format(str(self.batterylevelfull)))
+            
+        # Battery OK
+        try:
+            temp = int(Parameters["Mode3"])
+        except:
+            Domoticz.Error("Invalid Battery OK parameter")
+        else:
+            if temp < 40:
+                temp = 40
+                Domoticz.Error("Specified Battery OK value too low: changed to 40%")
+            elif temp > 75:
+                temp = 75
+                Domoticz.Error("Specified Battery OK value too high: changed to 75%")   
+            self.batterylevelok = temp
+         Domoticz.Log("Setting battery level to normal if greater or equal than {} percent".format(str(self.batterylevelok)))
+            
+        # Battery LOW
+        try:
+            temp = int(Parameters["Mode4"])
+        except:
+            Domoticz.Error("Invalid Battery LOW parameter")
+        else:
+            if temp < 10:
+                temp = 10
+                Domoticz.Error("Specified Battery LOW value too low: changed to 10%")
+            elif temp > 25:
+                temp = 25
+                Domoticz.Error("Specified Battery LOW value too high: changed to 25%")  
+            self.batterylevellow = temp
+        Domoticz.Log("Setting battery level to empty if less or equal than {} percent".format(str(self.batterylevellow)))
+        
         # load custom battery images
         for key, value in icons.items():
             if key not in Images:
@@ -152,11 +205,11 @@ class BasePlugin:
         # Make sure that the Domoticz device still exists (they can be deleted) before updating it
         if Unit in Devices:
             levelBatt = int(Percent)
-            if levelBatt >= 75:
+            if levelBatt >= self.batterylevelfull:
                 icon = "batterylevelfull"
-            elif levelBatt >= 50:
+            elif levelBatt >= self.batterylevelok:
                 icon = "batterylevelok"
-            elif levelBatt >= 25:
+            elif levelBatt >= self.batterylevellow:
                 icon = "batterylevellow"
             else:
                 icon = "batterylevelempty"
