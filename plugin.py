@@ -18,9 +18,10 @@ Versions:
     0.4.5: Fixed bug in the polling of zwave nodes (thanks to domoticz forum user @PBdA !)
     0.4.6: Fixed issue when on system reboot the zwave conf file is empty as openzwave rebuilts it
     0.4.7: Added battery levels as parameters (jrcasal)
+    0.4.8: zwave controller validity check at each poll rather than only at startup
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.5" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.4.8" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Mode1" label="Polling interval (minutes, between 30 and 1440 min)" width="40px" required="true" default="60"/>
         <param field="Mode2" label="Battery Level is Full (percent, between 75 and 99)"  width="40px" required="true" default="75" />
@@ -47,12 +48,16 @@ icons = {"batterylevelfull": "batterylevelfull icons.zip",
          "batterylevellow": "batterylevellow icons.zip",
          "batterylevelempty": "batterylevelempty icons.zip"}
 
+
 class zwnode:
+
     def __init__(self, nodeid, name, level):
         self.nodeid = nodeid
         self.name = name
         self.level = level
 
+
+# noinspection SyntaxError
 class BasePlugin:
 
     def __init__(self):
@@ -60,11 +65,10 @@ class BasePlugin:
         self.BatteryNodes = []  # work list that contains 'zwnode' objects
         self.nextupdate = datetime.now()
         self.pollinterval = 60  # default polling interval in minutes
-		self.batterylevelfull = 75 # Default values for Battery Levels
-		self.batterylevelok   = 50
-		self.batterylevellow  = 25
-        self.zwaveinfofilepath = ""
-        self.error = False
+        self.batterylevelfull = 75 # Default values for Battery Levels
+        self.batterylevelok   = 50
+        self.batterylevellow  = 25
+        self.zwaveinfofilepath = None
         return
 
     def onStart(self):
@@ -77,7 +81,7 @@ class BasePlugin:
         else:
             Domoticz.Debugging(0)
             
-        # Load custlom battery levels
+        # Load custom battery levels
         # Battery  Full
         try:
             temp = int(Parameters["Mode2"])
@@ -106,7 +110,7 @@ class BasePlugin:
                 temp = 75
                 Domoticz.Error("Specified Battery OK value too high: changed to 75%")   
             self.batterylevelok = temp
-         Domoticz.Log("Setting battery level to normal if greater or equal than {} percent".format(str(self.batterylevelok)))
+        Domoticz.Log("Setting battery level to normal if greater or equal than {} percent".format(str(self.batterylevelok)))
             
         # Battery LOW
         try:
@@ -119,7 +123,7 @@ class BasePlugin:
                 Domoticz.Error("Specified Battery LOW value too low: changed to 10%")
             elif temp > 25:
                 temp = 25
-                Domoticz.Error("Specified Battery LOW value too high: changed to 25%")  
+                Domoticz.Error("Specified Battery LOW value too high: changed to 25%")
             self.batterylevellow = temp
         Domoticz.Log("Setting battery level to empty if less or equal than {} percent".format(str(self.batterylevellow)))
         
@@ -147,26 +151,11 @@ class BasePlugin:
             self.pollinterval = temp
         Domoticz.Log("Using polling interval of {} minutes".format(str(self.pollinterval)))
 
-        # find zwave controller(s)... only one active allowed !
-        self.error = True
-        controllers = glob.glob("./Config/zwcfg_0x????????.xml")
-        if not controllers:
-            # test if we are running on a synology (different file locations)
-            controllers = glob.glob("/volume1/@appstore/domoticz/var/zwcfg_0x????????.xml")
-        for controller in controllers:
-            lastmod = datetime.fromtimestamp(os.stat(controller).st_mtime)
-            if lastmod < datetime.now() - timedelta(hours=2):
-                Domoticz.Error("Ignoring controller {} since presumed dead (not updated for more than 2 hours)".format(controller))
-            else:
-                self.zwaveinfofilepath = controller
-                self.error = False
-                break
-        if self.error:
-            Domoticz.Error("Enable to find a zwave controller configuration file !")
 
     def onStop(self):
         Domoticz.Debug("onStop called")
         Domoticz.Debugging(0)
+
 
     def onHeartbeat(self):
         now = datetime.now()
@@ -178,20 +167,40 @@ class BasePlugin:
 
     def pollnodes(self):
         self.BatteryNodes = []
-        # poll the openzwave file
-        if not self.error:
-            try:
-                zwavexml = xml.parse(self.zwaveinfofilepath)
-                zwave = zwavexml.getroot()
-            except:
-                Domoticz.Error("Error reading openzwave file {}".format(self.zwaveinfofilepath))
+
+        if not self.zwaveinfofilepath:
+            # find zwave controller(s)... only one active allowed !
+            controllers = glob.glob("./Config/zwcfg_0x????????.xml")
+            if not controllers:
+                # test if we are running on a synology (different file locations)
+                controllers = glob.glob("/volume1/@appstore/domoticz/var/zwcfg_0x????????.xml")
+            for controller in controllers:
+                lastmod = datetime.fromtimestamp(os.stat(controller).st_mtime)
+                if lastmod < datetime.now() - timedelta(hours=2):
+                    Domoticz.Error(
+                        "Ignoring controller {} since presumed dead (not updated for more than 2 hours)".format(
+                            controller))
+                    self.zwaveinfofilepath = None
+                else:
+                    self.zwaveinfofilepath = controller
+                    break
+
+            if not self.zwaveinfofilepath:
+                Domoticz.Error("Enable to find a zwave controller configuration file !")
             else:
-                for node in zwave:
-                    for commandclass in node[1]:  # node[1] is the list of CommandClasses
-                        if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
-                            self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
-                                                            int(commandclass[1].attrib["value"])))
-                            break
+                # poll the openzwave file
+                try:
+                    zwavexml = xml.parse(self.zwaveinfofilepath)
+                    zwave = zwavexml.getroot()
+                except:
+                    Domoticz.Error("Error reading openzwave file {}".format(self.zwaveinfofilepath))
+                else:
+                    for node in zwave:
+                        for commandclass in node[1]:  # node[1] is the list of CommandClasses
+                            if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
+                                self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
+                                                                int(commandclass[1].attrib["value"])))
+                                break
 
         for node in self.BatteryNodes:
             Domoticz.Debug("Node {} {} has battery level of {}%".format(node.nodeid, node.name, node.level))
@@ -200,6 +209,7 @@ class BasePlugin:
                 Domoticz.Device(Name=node.name, Unit=node.nodeid, TypeName="Custom",
                                 Options={"Custom": "1;%"}).Create()
             self.UpdateDevice(node.nodeid, str(node.level))
+
 
     def UpdateDevice(self, Unit, Percent):
         # Make sure that the Domoticz device still exists (they can be deleted) before updating it
@@ -218,6 +228,7 @@ class BasePlugin:
             except:
                 Domoticz.Error("Failed to update device unit " + str(Unit))
         return
+
 
 global _plugin
 _plugin = BasePlugin()
