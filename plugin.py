@@ -20,9 +20,10 @@ Versions:
     0.4.7: Added battery levels as parameters (jrcasal)
     0.4.8: zwave controller validity check at each poll rather than only at startup
     0.5.0: Support of openzwave 1.6 breaking changes
+    0.5.1: Minor code improvements
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.5.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.5.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <params>
         <param field="Mode1" label="Polling interval (minutes, between 30 and 1440 min)" width="40px" required="true" default="60"/>
         <param field="Mode2" label="Battery Level is Full (percent, between 75 and 99)"  width="40px" required="true" default="75" />
@@ -58,20 +59,19 @@ class zwnode:
         self.level = level
 
 
-# noinspection SyntaxError
 class BasePlugin:
 
     def __init__(self):
         self.debug = False
-        self.BatteryNodes = []  # work list that contains 'zwnode' objects
+        self.BatteryNodes = []      # work list that contains 'zwnode' objects
         self.nextupdate = datetime.now()
-        self.pollinterval = 60  # default polling interval in minutes
-        self.batterylevelfull = 75 # Default values for Battery Levels
+        self.pollinterval = 60      # default polling interval in minutes
+        self.batterylevelfull = 75  # Default values for Battery Levels
         self.batterylevelok   = 50
         self.batterylevellow  = 25
         self.OZWCacheDir = None
-        self.OZWVersion = None  # will be 1 for openzwave version before 1.6 or 3 for version 1.6
-                                # breaking change in index in xml cache)
+        self.OZWVersion = None      # will be 1 for openzwave version before 1.6 or 3 for version 1.6
+                                    # breaking change in index in xml cache)
         self.zwaveinfofilepath = None
         return
 
@@ -155,13 +155,13 @@ class BasePlugin:
             self.pollinterval = temp
         Domoticz.Log("Using polling interval of {} minutes".format(str(self.pollinterval)))
 
-        # check if we are running on a synology or standard install or if not supported...
+        # check if we are running on a standard install or a Synology NAS or if not supported...
         if os.path.isdir("./Config"):
             self.OZWCacheDir = "./Config"
         elif os.path.isdir("/volume1/@appstore/domoticz/var"):
             self.OZWCacheDir = "/volume1/@appstore/domoticz/var"
         else:
-            Domoticz.Error("Cannot locate openzwave cache location... plugin will not be functional")
+            Domoticz.Error("Cannot locate openzwave cache ! plugin will not be functional")
 
 
     def onStop(self):
@@ -184,7 +184,7 @@ class BasePlugin:
             return
 
         if not self.zwaveinfofilepath:
-        
+            # we have not yet read the OZW cache file (plugin just started or the cache was being rebuilt)
             # find zwave controller(s)... start with openzwave 1.6 file if it exists
             controllers = glob.glob(os.path.join(self.OZWCacheDir, "ozwcache_0x????????.xml"))
             self.OZWVersion = 3
@@ -204,22 +204,22 @@ class BasePlugin:
                     self.zwaveinfofilepath = controller
                     break  # plugin only deals with the first valid zwave controller found
 
-            if not self.zwaveinfofilepath:
-                Domoticz.Error("Enable to find a zwave controller configuration file !")
+        if not self.zwaveinfofilepath:
+            Domoticz.Error("Unable to find a zwave controller configuration file !")
+        else:
+            # poll the openzwave file
+            try:
+                zwavexml = xml.parse(self.zwaveinfofilepath)
+                zwave = zwavexml.getroot()
+            except Exception as err:
+                Domoticz.Error("Error reading openzwave file {}: {}".format(self.zwaveinfofilepath, err))
             else:
-                # poll the openzwave file
-                try:
-                    zwavexml = xml.parse(self.zwaveinfofilepath)
-                    zwave = zwavexml.getroot()
-                except Exception as err:
-                    Domoticz.Error("Error reading openzwave file {}: {}".format(self.zwaveinfofilepath, err))
-                else:
-                    for node in zwave:
-                        for commandclass in node[1]:  # node[1] is the list of CommandClasses
-                            if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
-                                self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
-                                                                int(commandclass[self.OZWVersion].attrib["value"])))
-                                break
+                for node in zwave:
+                    for commandclass in node[1]:  # node[1] is the list of CommandClasses
+                        if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
+                            self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
+                                                            int(commandclass[self.OZWVersion].attrib["value"])))
+                            break
 
         for node in self.BatteryNodes:
             Domoticz.Debug("Node {} {} has battery level of {}%".format(node.nodeid, node.name, node.level))
