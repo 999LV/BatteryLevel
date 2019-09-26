@@ -1,7 +1,7 @@
 """
 Domoticz Python plugin for Monitoring and logging of battery level for z-wave nodes
 
-Author: Logread (aka 999LV on GitHub). Contact @logread on www.domoticz.com/forum
+Author: Logread
 
 Icons are from wpclipart.com. many thanks to them for these public domain graphics:
 
@@ -24,36 +24,27 @@ Versions:
     0.5.0: Support of openzwave 1.6 breaking changes
     0.5.1: Minor code improvements
     0.5.2: Do not update devices if no change in battery level + added plugin description for HW page + cosmetics
-    0.6.0: Major rewrite since openzwave 1.6 no longer updates cache file.
-            Using a new domoticz API call created on purpose by @gizmocuz ! Many thanks to him
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.6.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.5.2" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <description>
         <h2>Battery Level Plugin</h2><br/>
-        Version 0.6.0 for domoticz version above 4.11253
-        <p>This plugin allows monitoring of the battery level of ZWave devices managed by domoticz.
+        Version 0.5.2
+        <p>This plugin allows monitoring of the battery level of ZWave devices managed by domoticz. It works by polling the OpeZWave cache, bypassing domoticz's implementation of battery reporting:
         </p>
-        <ol><li>It polls at regular intervals domoticz for battery operated nodes and creates/updates a Domoticz device for each.</li>
+        <ol><li>It polls at regular intervals the OZW cache for battery operated nodes and creates/updates a Domoticz device for each.</li>
         <li>Each of the devices representing a battery operated z-wave node will allow:
         <ol><li>An easy to read display of the current battery level</li>
         <li>Logging over time like for any Domoticz sensor</li>
         <li>The definition of custom battery level notifications or events for each specific z-wave node</li>
-        <li>As a bonus, a dynamic icon will display the battery level in 4 colors (green if &gt;75%, yellow if 50 to 75%, orange if 25 to 50% and red if below 25%).</li>
-        <li>NOTE: upon Domoticz startup, battery levels will not be available until each zwave node sends update/wakes up. Please be patient as it may take a few</li>
-        <li>hours for devices to be created (for new installs or newly included zwave nodes) or updated (red background in the GUI).</li>
-        </ol></li></ol>
+        <li>As a bonus, a dynamic icon will display the battery level in 4 colors (green if &gt;75%, yellow if 50 to 75%, orange if 25 to 50% and red if below 25%).
+        </li></ol></li></ol>
     </description>
     <params>
-        <param field="Address" label="Domoticz IP Address" width="200px" required="true" default="localhost"/>
-        <param field="Port" label="Port" width="40px" required="true" default="8080"/>
-        <param field="Username" label="Username" width="200px" required="false" default=""/>
-        <param field="Password" label="Password" width="200px" required="false" default=""/>
         <param field="Mode1" label="Polling interval (minutes, between 30 and 1440 min)" width="40px" required="true" default="60"/>
         <param field="Mode2" label="Battery Level is Full (percent, between 75 and 99)"  width="40px" required="true" default="75" />
         <param field="Mode3" label="Battery Level is OK (percent, between 40 and 75)"    width="40px" required="true" default="50" />
         <param field="Mode4" label="Battery Level is empty (percent, between 10 and 25)" width="40px" required="true" default="25" />
-        <param field="Mode5" label="Domoticz Hardware IDX of ZWave Controller" width="40px" required="true" default=""/>
         <param field="Mode6" label="Debug" width="75px">
             <options>
                 <option label="True"  value="Debug"/>
@@ -64,10 +55,9 @@ Versions:
 </plugin>
 """
 import Domoticz
-import json
-import urllib.parse as parse
-import urllib.request as request
-import base64
+import xml.etree.ElementTree as xml
+import os
+import glob
 from datetime import datetime
 from datetime import timedelta
 
@@ -75,6 +65,14 @@ icons = {"batterylevelfull": "batterylevelfull icons.zip",
          "batterylevelok": "batterylevelok icons.zip",
          "batterylevellow": "batterylevellow icons.zip",
          "batterylevelempty": "batterylevelempty icons.zip"}
+
+
+class zwnode:
+
+    def __init__(self, nodeid, name, level):
+        self.nodeid = nodeid
+        self.name = name
+        self.level = level
 
 
 class BasePlugin:
@@ -87,36 +85,22 @@ class BasePlugin:
         self.batterylevelfull = 75  # Default values for Battery Levels
         self.batterylevelok   = 50
         self.batterylevellow  = 25
-        self.versionOK = False
+        self.OZWCacheDir = None
+        self.OZWVersion = None      # will be 1 for openzwave version before 1.6 or 3 for version 1.6
+                                    # breaking change in index in xml cache)
+        self.zwaveinfofilepath = None
         return
 
     def onStart(self):
         global icons
+        Domoticz.Debug("onStart called")
         if Parameters["Mode6"] == 'Debug':
             self.debug = True
             Domoticz.Debugging(1)
             DumpConfigToLog()
         else:
             Domoticz.Debugging(0)
-        Domoticz.Debug("onStart called")
-
-        # check if version of domoticz supports the API call introduced in version 4.11253
-        try:
-            version = int(Parameters["DomoticzVersion"].split('.')[1])
-            if version < 11253:
-                Domoticz.Error(
-                    "Domoticz version required by this plugin is build 11253 (you are running version {}).".format(
-                        version))
-                Domoticz.Error("Plugin is therefore disabled")
-            else:
-                self.versionOK = True
-        except Exception as err:
-            Domoticz.Error("Domoticz version check returned an error: {}. Plugin is therefore disabled".format(err))
-        if not self.versionOK:
-            return
-
-        # proceed with the plugin setup
-
+            
         # Load custom battery levels
         # Battery  Full
         try:
@@ -187,6 +171,14 @@ class BasePlugin:
             self.pollinterval = temp
         Domoticz.Log("Using polling interval of {} minutes".format(str(self.pollinterval)))
 
+        # check if we are running on a standard install or a Synology NAS or if not supported...
+        if os.path.isdir("./Config"):
+            self.OZWCacheDir = "./Config"
+        elif os.path.isdir("/volume1/@appstore/domoticz/var"):
+            self.OZWCacheDir = "/volume1/@appstore/domoticz/var"
+        else:
+            Domoticz.Error("Cannot locate openzwave cache ! plugin will not be functional")
+
 
     def onStop(self):
         Domoticz.Debug("onStop called")
@@ -194,140 +186,100 @@ class BasePlugin:
 
 
     def onHeartbeat(self):
-        if self.versionOK:
-            now = datetime.now()
-            if now >= self.nextupdate:
-                self.nextupdate = now + timedelta(minutes=self.pollinterval)
-                self.pollnodes()
+        now = datetime.now()
+        if now >= self.nextupdate:
+            self.nextupdate = now + timedelta(minutes=self.pollinterval)
+            self.pollnodes()
+
+    # BatteryLevel specific methods
 
     def pollnodes(self):
-        BatteryNodes = {}
-        APIjson = DomoticzAPI("type=command&param=zwavegetbatterylevels&idx={}".format(Parameters["Mode5"]))
-        try:
-            nodes = APIjson["result"]
-        except:
-            nodes = []
+        self.BatteryNodes = []
+        
+        if not self.OZWCacheDir:  # do nothing if openzwave cache location unknown
+            return
 
-        for node in nodes:  # loop all nodes received from domoticz
-            Domoticz.Debug(
-                "Node {} {} has battery level of {}%".format(node["nodeID"], node["nodeName"], node["battery"]))
-            # if device does not yet exist, then create it
-            if node["battery"] != 255:  # battery level = 255 if not a battery device
-                if not (node["nodeID"] in Devices):
-                    Domoticz.Device(Name=node["nodeName"] if node["nodeName"] != "" else "Node {}".format(node["nodeID"]),
-                                    Unit=node["nodeID"], TypeName="Custom",
-                                    Options={"Custom": "1;%"}).Create()
-                BatteryNodes[node["nodeID"]] = node["battery"]
+        if not self.zwaveinfofilepath:
+            # we have not yet read the OZW cache file (plugin just started or the cache was being rebuilt)
+            # find zwave controller(s)... start with openzwave 1.6 file if it exists
+            controllers = glob.glob(os.path.join(self.OZWCacheDir, "ozwcache_0x????????.xml"))
+            self.OZWVersion = 3
+            if not controllers:
+                # previous test failed... try openzwave legacy (version < 1.6) file
+                controllers = glob.glob(os.path.join(self.OZWCacheDir, "zwcfg_0x????????.xml"))
+                self.OZWVersion = 1
 
-        for Unit in Devices:  # loop all devices of the plugin and check if we need to update
-            try:
-                levelBatt = int(BatteryNodes[Unit])
-            except KeyError:  # the node is not in the list returned by domoticz... e.g. not yet updated ?
-                UpdateDevice(Unit, TimedOut=True)
-            else:
-                if levelBatt >= self.batterylevelfull:
-                    icon = "batterylevelfull"
-                elif levelBatt >= self.batterylevelok:
-                    icon = "batterylevelok"
-                elif levelBatt >= self.batterylevellow:
-                    icon = "batterylevellow"
+            for controller in controllers:
+                lastmod = datetime.fromtimestamp(os.stat(controller).st_mtime)
+                if lastmod < datetime.now() - timedelta(hours=2):
+                    Domoticz.Error(
+                        "Ignoring controller {} since presumed dead (not updated for more than 2 hours)".format(
+                            controller))
+                    self.zwaveinfofilepath = None
                 else:
-                    icon = "batterylevelempty"
-                UpdateDevice(Unit, sValue=str(BatteryNodes[Unit]), TimedOut=False, Image=Images[icon].ID)
+                    self.zwaveinfofilepath = controller
+                    break  # plugin only deals with the first valid zwave controller found
 
-
-def UpdateDevice(Unit, **kwargs):
-    if Unit in Devices:
-        # check if kwargs contain an update for nValue or sValue... if not, use the existing one(s)
-        if "nValue" in kwargs:
-            nValue = kwargs["nValue"]
+        if not self.zwaveinfofilepath:
+            Domoticz.Error("Unable to find a zwave controller configuration file !")
         else:
-            nValue = Devices[Unit].nValue
-        if "sValue" in kwargs:
-            sValue = kwargs["sValue"]
-        else:
-            sValue = Devices[Unit].sValue
+            # poll the openzwave file
+            try:
+                zwavexml = xml.parse(self.zwaveinfofilepath)
+                zwave = zwavexml.getroot()
+            except Exception as err:
+                Domoticz.Error("Error reading openzwave file {}: {}".format(self.zwaveinfofilepath, err))
+            else:
+                for node in zwave:
+                    for commandclass in node[1]:  # node[1] is the list of CommandClasses
+                        if commandclass.attrib["id"] == "128":  # CommandClass id=128 is BATTERY_LEVEL
+                            self.BatteryNodes.append(zwnode(int(node.attrib["id"]), node.attrib["name"],
+                                                            int(commandclass[self.OZWVersion].attrib["value"])))
+                            break
 
-        # build the arguments for the call to Device.Update
-        update_args = {"nValue": nValue, "sValue": sValue}
-        change = False
-        if nValue != Devices[Unit].nValue or sValue != Devices[Unit].sValue:
-            change = True
-        for arg in kwargs:
-            if arg == "TimedOut":
-                if kwargs[arg] != Devices[Unit].TimedOut:
-                    change = True
-                    update_args[arg] = kwargs[arg]
-                Domoticz.Debug("TimedOut = {}".format(kwargs[arg]))
-            if arg == "BatteryLevel":
-                if kwargs[arg] != Devices[Unit].BatteryLevel:
-                    change = True
-                    update_args[arg] = kwargs[arg]
-                Domoticz.Debug("BatteryLevel = {}".format(kwargs[arg]))
-            if arg == "Color":
+        for node in self.BatteryNodes:
+            Domoticz.Debug("Node {} {} has battery level of {}%".format(node.nodeid, node.name, node.level))
+            # if device does not yet exist, then create it
+            if not (node.nodeid in Devices):
+                Domoticz.Device(Name=node.name, Unit=node.nodeid, TypeName="Custom",
+                                Options={"Custom": "1;%"}).Create()
+            self.UpdateDevice(node.nodeid, str(node.level))
+
+
+    def UpdateDevice(self, Unit, Percent):
+        # Make sure that the Domoticz device still exists (they can be deleted) before updating it
+        if Unit in Devices:
+            levelBatt = int(Percent)
+            if levelBatt >= self.batterylevelfull:
+                icon = "batterylevelfull"
+            elif levelBatt >= self.batterylevelok:
+                icon = "batterylevelok"
+            elif levelBatt >= self.batterylevellow:
+                icon = "batterylevellow"
+            else:
+                icon = "batterylevelempty"
+            if Devices[Unit].sValue != Percent:  # only update the device if there is a change in value
                 try:
-                    if kwargs[arg] != Devices[Unit].Color:
-                        change = True
+                    Devices[Unit].Update(nValue=0, sValue=Percent, Image=Images[icon].ID)
                 except:
-                    change = True
-                finally:
-                    if change:
-                        update_args[arg] = kwargs[arg]
-                Domoticz.Debug("Color = {}".format(kwargs[arg]))
-            if arg == "Image":
-                    if kwargs[arg] != Devices[Unit].Image:
-                        change = True
-                        update_args[arg] = kwargs[arg]
-            if arg == "Forced":
-                change = change or kwargs[arg]
-        Domoticz.Debug("Change in device {} = {}".format(Unit, change))
-        if change:
-            Devices[Unit].Update(**update_args)
-
-
-def DomoticzAPI(APICall):
-    resultJson = None
-    url = "http://{}:{}/json.htm?{}".format(Parameters["Address"], Parameters["Port"], parse.quote(APICall, safe="&="))
-    Domoticz.Debug("Calling domoticz API: {}".format(url))
-    try:
-        req = request.Request(url)
-        if Parameters["Username"] != "":
-            Domoticz.Debug("Add authentification for user {}".format(Parameters["Username"]))
-            credentials = ('%s:%s' % (Parameters["Username"], Parameters["Password"]))
-            encoded_credentials = base64.b64encode(credentials.encode('ascii'))
-            req.add_header('Authorization', 'Basic %s' % encoded_credentials.decode("ascii"))
-
-        response = request.urlopen(req)
-        if response.status == 200:
-            resultJson = json.loads(response.read().decode('utf-8'))
-            if resultJson["status"] != "OK":
-                Domoticz.Error("Domoticz API returned an error: status = {}".format(resultJson["status"]))
-                resultJson = None
-        else:
-            Domoticz.Error("Domoticz API: http error = {}".format(response.status))
-    except:
-        Domoticz.Error("Error calling '{}'".format(url))
-    return resultJson
+                    Domoticz.Error("Failed to update device unit " + str(Unit))
+        return
 
 
 global _plugin
 _plugin = BasePlugin()
 
-
 def onStart():
     global _plugin
     _plugin.onStart()
-
 
 def onStop():
     global _plugin
     _plugin.onStop()
 
-
 def onHeartbeat():
     global _plugin
     _plugin.onHeartbeat()
-
 
 # Generic helper functions
 def DumpConfigToLog():
