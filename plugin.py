@@ -26,12 +26,13 @@ Versions:
     0.5.2: Do not update devices if no change in battery level + added plugin description for HW page + cosmetics
     0.6.0: Major rewrite since openzwave 1.6 no longer updates cache file.
             Using a new domoticz API call created on purpose by @gizmocuz ! Many thanks to him
+    0.6.1: update domoticz version check following new version numbering scheme implemented 22/03/2020 in domoticz
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.6.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.6.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <description>
         <h2>Battery Level Plugin</h2><br/>
-        Version 0.6.0 for domoticz version above 4.11253
+        Version 0.6.1 for domoticz version above 4.11253
         <p>This plugin allows monitoring of the battery level of ZWave devices managed by domoticz.
         </p>
         <ol><li>It polls at regular intervals domoticz for battery operated nodes and creates/updates a Domoticz device for each.</li>
@@ -101,13 +102,16 @@ class BasePlugin:
         Domoticz.Debug("onStart called")
 
         # check if version of domoticz supports the API call introduced in version 4.11253
+        # watch out: new numbering of domoticz versions implemented 22 March 2020
         try:
-            version = int(Parameters["DomoticzVersion"].split('.')[1])
-            if version < 11253:
-                Domoticz.Error(
-                    "Domoticz version required by this plugin is build 11253 (you are running version {}).".format(
-                        version))
-                Domoticz.Error("Plugin is therefore disabled")
+            if int(Parameters["DomoticzVersion"].split('.')[0]) < 2020:  # check domoticz major version
+                if int(Parameters["DomoticzVersion"].split('.')[1]) < 11253: # check domoticz minor version
+                    Domoticz.Error(
+                        "Domoticz version required by this plugin is 4.11253 (you are running version {}).".format(
+                            Parameters["DomoticzVersion"]))
+                    Domoticz.Error("Plugin is therefore disabled")
+                else:
+                    self.versionOK = True
             else:
                 self.versionOK = True
         except Exception as err:
