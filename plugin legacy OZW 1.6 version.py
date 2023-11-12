@@ -10,7 +10,7 @@ Versions:
     0.3.0: refactor of code to use asyncronous callbacks for http calls
     0.3.1: skip zwave devices with "non standard" ID attribution (thanks @bdormael)
     0.3.2: rewrote the hashing of device ID into zwave node id in line with /hardware/ZWaveBase.cpp
-    0.4.0: Major change: Use openzwave as data source instead of the Domoticz API...
+    0.4.0: Major change: Use openzwave as data source instead of the Domoticz API... 
             simpler, faster and possibly more "real-time" information
     0.4.1: Code made compliant with Python plugin framework breaking changes
             https://www.domoticz.com/forum/viewtopic.php?f=65&t=17554
@@ -27,15 +27,13 @@ Versions:
     0.6.0: Major rewrite since openzwave 1.6 no longer updates cache file.
             Using a new domoticz API call created on purpose by @gizmocuz ! Many thanks to him
     0.6.1: update domoticz version check following new version numbering scheme implemented 22/03/2020 in domoticz
-    0.7.0: complete revamping to work with MQTT zwave-js-ui as openzwave has been deprecated.
-           PREREQUISITE: install paho.mqtt python module "sudo pip install paho.mqtt" (see https://github.com/eclipse/paho.mqtt.python)
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.7.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.6.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <description>
         <h2>Battery Level Plugin</h2><br/>
-        Version 0.7.0 for domoticz version 2022.2 minimum. Prerequisite: "sudo pip install paho.mqtt"
-        <p>This plugin allows monitoring of the battery level of ZWave devices managed by zwave-js-ui via MQTT.
+        Version 0.6.1 for domoticz version above 4.11253
+        <p>This plugin allows monitoring of the battery level of ZWave devices managed by domoticz.
         </p>
         <ol><li>It polls at regular intervals domoticz for battery operated nodes and creates/updates a Domoticz device for each.</li>
         <li>Each of the devices representing a battery operated z-wave node will allow:
@@ -48,15 +46,15 @@ Versions:
         </ol></li></ol>
     </description>
     <params>
-        <param field="Address" label="zwave-js-ui IP address" width="200px" required="true" default="127.0.0.1"/>
-        <param field="Port" label="Port" width="60px" required="true" default="1883"/>
-        <param field="Username" label="MQTT Username" width="200px" required="false" default=""/>
-        <param field="Password" label="MQTT Password" width="200px" required="false" default=""/>
+        <param field="Address" label="Domoticz IP Address" width="200px" required="true" default="localhost"/>
+        <param field="Port" label="Port" width="40px" required="true" default="8080"/>
+        <param field="Username" label="Username" width="200px" required="false" default=""/>
+        <param field="Password" label="Password" width="200px" required="false" default=""/>
         <param field="Mode1" label="Polling interval (minutes, between 30 and 1440 min)" width="40px" required="true" default="60"/>
         <param field="Mode2" label="Battery Level is Full (percent, between 75 and 99)"  width="40px" required="true" default="75" />
         <param field="Mode3" label="Battery Level is OK (percent, between 40 and 75)"    width="40px" required="true" default="50" />
         <param field="Mode4" label="Battery Level is empty (percent, between 10 and 25)" width="40px" required="true" default="25" />
-        <param field="Mode5" label="MQTT name of zwave-js-ui client" width="200px" required="true" default="zwave-js-ui"/>
+        <param field="Mode5" label="Domoticz Hardware IDX of ZWave Controller" width="40px" required="true" default=""/>
         <param field="Mode6" label="Debug" width="75px">
             <options>
                 <option label="True"  value="Debug"/>
@@ -68,10 +66,11 @@ Versions:
 """
 import Domoticz
 import json
+import urllib.parse as parse
+import urllib.request as request
+import base64
 from datetime import datetime
 from datetime import timedelta
-import paho.mqtt.client as mqtt
-
 
 icons = {"batterylevelfull": "batterylevelfull icons.zip",
          "batterylevelok": "batterylevelok icons.zip",
@@ -82,19 +81,18 @@ icons = {"batterylevelfull": "batterylevelfull icons.zip",
 class BasePlugin:
 
     def __init__(self):
-        global batterylevelfull, batterylevelok, batterylevellow
         self.debug = False
         self.BatteryNodes = []      # work list that contains 'zwnode' objects
         self.nextupdate = datetime.now()
         self.pollinterval = 60      # default polling interval in minutes
-        batterylevelfull = 75  # Default values for Battery Levels
-        batterylevelok   = 50
-        batterylevellow  = 25
-        self.MQTT_OK = False
-
+        self.batterylevelfull = 75  # Default values for Battery Levels
+        self.batterylevelok   = 50
+        self.batterylevellow  = 25
+        self.versionOK = False
+        return
 
     def onStart(self):
-        global icons, topic, batterylevelfull, batterylevelok, batterylevellow
+        global icons
         if Parameters["Mode6"] == 'Debug':
             self.debug = True
             Domoticz.Debugging(1)
@@ -102,6 +100,24 @@ class BasePlugin:
         else:
             Domoticz.Debugging(0)
         Domoticz.Debug("onStart called")
+
+        # check if version of domoticz supports the API call introduced in version 4.11253
+        # watch out: new numbering of domoticz versions implemented 22 March 2020
+        try:
+            if int(Parameters["DomoticzVersion"].split('.')[0]) < 2020:  # check domoticz major version
+                if int(Parameters["DomoticzVersion"].split('.')[1]) < 11253: # check domoticz minor version
+                    Domoticz.Error(
+                        "Domoticz version required by this plugin is 4.11253 (you are running version {}).".format(
+                            Parameters["DomoticzVersion"]))
+                    Domoticz.Error("Plugin is therefore disabled")
+                else:
+                    self.versionOK = True
+            else:
+                self.versionOK = True
+        except Exception as err:
+            Domoticz.Error("Domoticz version check returned an error: {}. Plugin is therefore disabled".format(err))
+        if not self.versionOK:
+            return
 
         # proceed with the plugin setup
 
@@ -118,9 +134,9 @@ class BasePlugin:
             elif temp > 99:
                 temp = 99
                 Domoticz.Error("Specified Battery Full value too high: changed to 99%")
-            batterylevelfull = temp
-        Domoticz.Log("Setting battery level to full if greater or equal than {} percent".format(batterylevelfull))
-
+            self.batterylevelfull = temp
+        Domoticz.Log("Setting battery level to full if greater or equal than {} percent".format(self.batterylevelfull))
+            
         # Battery OK
         try:
             temp = int(Parameters["Mode3"])
@@ -132,10 +148,10 @@ class BasePlugin:
                 Domoticz.Error("Specified Battery OK value too low: changed to 40%")
             elif temp > 75:
                 temp = 75
-                Domoticz.Error("Specified Battery OK value too high: changed to 75%")
-            batterylevelok = temp
-        Domoticz.Log("Setting battery level to normal if greater or equal than {} percent".format(batterylevelok))
-
+                Domoticz.Error("Specified Battery OK value too high: changed to 75%")   
+            self.batterylevelok = temp
+        Domoticz.Log("Setting battery level to normal if greater or equal than {} percent".format(self.batterylevelok))
+            
         # Battery LOW
         try:
             temp = int(Parameters["Mode4"])
@@ -148,9 +164,9 @@ class BasePlugin:
             elif temp > 25:
                 temp = 25
                 Domoticz.Error("Specified Battery LOW value too high: changed to 25%")
-            batterylevellow = temp
-        Domoticz.Log("Setting battery level to empty if less or equal than {} percent".format(batterylevellow))
-
+            self.batterylevellow = temp
+        Domoticz.Log("Setting battery level to empty if less or equal than {} percent".format(self.batterylevellow))
+        
         # load custom battery images
         for key, value in icons.items():
             if key not in Images:
@@ -173,98 +189,55 @@ class BasePlugin:
                 temp = 1440  # maximum polling interval is 1 day
                 Domoticz.Error("Specified polling interval too long: changed to 1440 minutes (24 hours)")
             self.pollinterval = temp
-        Domoticz.Status("Using polling interval of {} minutes".format(str(self.pollinterval)))
-
-        # create MQQT connection, connect to it and start network loop
-        self.client = mqtt.Client()
-        self.client.on_connect = on_connect
-        self.client.on_disconnect = on_disconnect
-        self.client.on_message = on_message
-        self.client.username_pw_set(Parameters["Username"], password=Parameters["Password"])
-        topic = "zwave/_CLIENTS/ZWAVE_GATEWAY-{}/api/getNodes".format(Parameters["Mode5"])
-        try:
-            # establish an asynchronous connection (different thread)
-            self.client.connect_async(Parameters["Address"], int(Parameters["Port"]), 60)
-        except Exception as err:
-            Domoticz.Error("MQTT connection error: {}".format(err))
-        else:
-            self.MQTT_OK = True
-            Domoticz.Debug("Starting MQTT network loop")
-            # launch MQTT network loop thread
-            self.client.loop_start()
+        Domoticz.Log("Using polling interval of {} minutes".format(str(self.pollinterval)))
 
 
     def onStop(self):
         Domoticz.Debug("onStop called")
         Domoticz.Debugging(0)
-        # kill the MQTT loop thread
-        self.client.loop_stop(force=True)
-        self.client.disconnect()
 
 
     def onHeartbeat(self):
-        global topic
-        now = datetime.now()
-        if now >= self.nextupdate:
-            self.nextupdate = now + timedelta(minutes=self.pollinterval)
-            if self.MQTT_OK:
-                Domoticz.Status("Polling MQTT client '{}' for zwave nodes data".format(Parameters["Mode5"]))
-                self.client.publish(topic + "/set", payload='{"args": []}', qos=0, retain=False)
+        if self.versionOK:
+            now = datetime.now()
+            if now >= self.nextupdate:
+                self.nextupdate = now + timedelta(minutes=self.pollinterval)
+                self.pollnodes()
 
+    def pollnodes(self):
+        BatteryNodes = {}
+        APIjson = DomoticzAPI("type=command&param=zwavegetbatterylevels&idx={}".format(Parameters["Mode5"]))
+        try:
+            nodes = APIjson["result"]
+        except:
+            nodes = []
 
-def on_connect(client, userdata, flags, rc):
-    global topic
-    Domoticz.Debug("Connected to MQTT with result code {}".format(rc))
-    # Subscribing in on_connect() means that if we lose the connection and
-    # reconnect then subscriptions will be renewed.
-    client.subscribe(topic)
+        for node in nodes:  # loop all nodes received from domoticz
+            Domoticz.Debug(
+                "Node {} {} has battery level of {}%".format(node["nodeID"], node["nodeName"], node["battery"]))
+            # if device does not yet exist, then create it
+            if node["battery"] != 255:  # battery level = 255 if not a battery device
+                if not (node["nodeID"] in Devices):
+                    Domoticz.Device(Name=node["nodeName"] if node["nodeName"] != "" else "Node {}".format(node["nodeID"]),
+                                    Unit=node["nodeID"], TypeName="Custom",
+                                    Options={"Custom": "1;%"}).Create()
+                BatteryNodes[node["nodeID"]] = node["battery"]
 
-
-def on_disconnect(client, userdata, rc):
-    if rc != 0:
-        Domoticz.Error("Unexpected disconnection from MQTT. Error code {}".format(rc))
-    else:
-        Domoticz.Debug("Disconnect from MQTT broker OK !")
-
-
-def on_message(client, userdata, msg):
-    global topic, batterylevelfull, batterylevelok, batterylevellow
-    Domoticz.Debug("MQTT message received: {}".format(msg.topic))
-    if msg.topic == topic:
-        Domoticz.Debug("MQTT response received")
-        r = json.loads(msg.payload.decode())
-        if r["success"]:
-            BatteryNodes = {}
-            Domoticz.Status("zwave nodes data received from MQTT client '{}'. Updating devices as required.".format(Parameters["Mode5"]))
-            # loop all nodes received from MQTT client
-            for node in r["result"]:
-                if "minBatteryLevel" in node:
-                    Domoticz.Debug("Node {} {} has battery level of {}%".format(node["id"], node["name"], node["minBatteryLevel"]))
-                    if not (int(node["id"]) in Devices):
-                        Domoticz.Device(Name=node["name"] if node["name"] != "" else "Node {}".format(node["id"]), Unit=int(node["id"]),
-                                        TypeName="Custom", Options={"Custom": "1;%"}).Create()
-                    BatteryNodes[int(node["id"])] = int(node["minBatteryLevel"])
-            # loop all devices of the plugin and check if we need to update or mark as not  updated
-            for Unit in Devices:
-                Domoticz.Debug("Unit = {} {}".format(Unit, type(Unit)))
-                try:
-                    levelBatt = int(BatteryNodes[Unit])
-                except KeyError:  # the node is not in the list returned by the MQTT zwave gateway... e.g. not yet updated or deleted ?
-                    UpdateDevice(Unit, TimedOut=True)
-                else:
-                    if levelBatt >= batterylevelfull:
-                        icon = "batterylevelfull"
-                    elif levelBatt >= batterylevelok:
-                        icon = "batterylevelok"
-                    elif levelBatt >= batterylevellow:
-                        icon = "batterylevellow"
-                    else:
-                        icon = "batterylevelempty"
-                    UpdateDevice(Unit, sValue=str(BatteryNodes[Unit]), TimedOut=False, Image=Images[icon].ID)
-        else:
-            Domoticz.Error("MQTT call error: {}".format(r["message"]))
-            for Unit in Devices:  # loop all devices of the plugin and mark as timedout due to bad MQTT status
+        for Unit in Devices:  # loop all devices of the plugin and check if we need to update
+            try:
+                levelBatt = int(BatteryNodes[Unit])
+            except KeyError:  # the node is not in the list returned by domoticz... e.g. not yet updated ?
                 UpdateDevice(Unit, TimedOut=True)
+            else:
+                if levelBatt >= self.batterylevelfull:
+                    icon = "batterylevelfull"
+                elif levelBatt >= self.batterylevelok:
+                    icon = "batterylevelok"
+                elif levelBatt >= self.batterylevellow:
+                    icon = "batterylevellow"
+                else:
+                    icon = "batterylevelempty"
+                UpdateDevice(Unit, sValue=str(BatteryNodes[Unit]), TimedOut=False, Image=Images[icon].ID)
 
 
 def UpdateDevice(Unit, **kwargs):
@@ -314,6 +287,31 @@ def UpdateDevice(Unit, **kwargs):
         Domoticz.Debug("Change in device {} = {}".format(Unit, change))
         if change:
             Devices[Unit].Update(**update_args)
+
+
+def DomoticzAPI(APICall):
+    resultJson = None
+    url = "http://{}:{}/json.htm?{}".format(Parameters["Address"], Parameters["Port"], parse.quote(APICall, safe="&="))
+    Domoticz.Debug("Calling domoticz API: {}".format(url))
+    try:
+        req = request.Request(url)
+        if Parameters["Username"] != "":
+            Domoticz.Debug("Add authentification for user {}".format(Parameters["Username"]))
+            credentials = ('%s:%s' % (Parameters["Username"], Parameters["Password"]))
+            encoded_credentials = base64.b64encode(credentials.encode('ascii'))
+            req.add_header('Authorization', 'Basic %s' % encoded_credentials.decode("ascii"))
+
+        response = request.urlopen(req)
+        if response.status == 200:
+            resultJson = json.loads(response.read().decode('utf-8'))
+            if resultJson["status"] != "OK":
+                Domoticz.Error("Domoticz API returned an error: status = {}".format(resultJson["status"]))
+                resultJson = None
+        else:
+            Domoticz.Error("Domoticz API: http error = {}".format(response.status))
+    except:
+        Domoticz.Error("Error calling '{}'".format(url))
+    return resultJson
 
 
 global _plugin
