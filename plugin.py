@@ -28,13 +28,15 @@ Versions:
             Using a new domoticz API call created on purpose by @gizmocuz ! Many thanks to him
     0.6.1: update domoticz version check following new version numbering scheme implemented 22/03/2020 in domoticz
     0.7.0: complete revamping to work with MQTT zwave-js-ui as openzwave has been deprecated.
-           PREREQUISITE: install paho.mqtt python module "sudo pip install paho.mqtt" (see https://github.com/eclipse/paho.mqtt.python)
+    0.7.1: adjust code to changes in paho.mqtt python module (no "force" parameter anymore)
+
+    WARNING !!! PREREQUISITE: install paho.mqtt python module "sudo pip install paho.mqtt" (see https://github.com/eclipse/paho.mqtt.python)
 """
 """
-<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.7.0" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
+<plugin key="BatteryLevel" name="Battery monitoring for Z-Wave nodes" author="logread" version="0.7.1" wikilink="http://www.domoticz.com/wiki/plugins/BatteryLevel.html" externallink="https://github.com/999LV/BatteryLevel">
     <description>
         <h2>Battery Level Plugin</h2><br/>
-        Version 0.7.0 for domoticz version 2022.2 minimum. Prerequisite: "sudo pip install paho.mqtt"
+        Version 0.7.1 for domoticz version 2022.2 minimum. Prerequisite: "sudo pip install paho.mqtt"
         <p>This plugin allows monitoring of the battery level of ZWave devices managed by zwave-js-ui via MQTT.
         </p>
         <ol><li>It polls at regular intervals domoticz for battery operated nodes and creates/updates a Domoticz device for each.</li>
